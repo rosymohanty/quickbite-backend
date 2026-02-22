@@ -1,6 +1,7 @@
 const User=require("../models/userModel");
 const bcrypt=require("bcryptjs");
 const jwt=require("jsonwebtoken");
+const crypto=require("crypto");
 const sendEmail=require("../utils/sendEmail");
 //REGISTER
 const register=async(req,res)=>{
@@ -93,7 +94,70 @@ const login=async(req,res)=>{
       token
     });
   }catch(error){
+res.status(500).json({message:error.message});
+  }
+};
+// FORGOT PASSWORD
+const forgotPassword=async(req,res)=>{
+  try{
+    const {email}=req.body;
+    const user=await User.findOne({email});
+    if(!user){
+      return res.status(400).json({message:"User not found"});
+    }
+    const otp=Math.floor(100000+Math.random()*900000).toString();
+    user.resetOTP=otp;
+    user.otpExpire=Date.now()+10*60*1000;
+    await user.save();
+    await sendEmail(
+      email,
+      "Password Reste OTP",
+      `<h3>Your OTP is: ${otp}</h3>`,
+    );
+    res.json({message:"OTP sent to email"});
+  }catch(error){
     res.status(500).json({message:error.message});
   }
 };
-module.exports={register,login};
+// VERIFY OTP + RESET PASSWORD
+const resetPassword=async(req,res)=>{
+  try{
+    const {email,otp,newPassword,confirmPassword}=req.body;
+    if(newPassword!==confirmPassword){
+      return res.status(400).json({message:"Passwords do not match"});
+    }
+    const user=await User.findOne({
+      email,
+      resetOTP:otp,
+      otpExpire:{$gt:Date.now()}
+    });
+    if(!user){
+      return res.status(400).json({message:"Invalid or expired OTP"});
+    }
+    const hashedPassword=await bcrypt.hash(newPassword,10);
+    user.password=hashedPassword;
+    user.resetOTP=undefined;
+    user.otpExpire=undefined;
+    await user.save();
+    res.json({message:"Password reset successful"});
+  }catch(error){
+    res.status(500).json({message:error.message});
+  }
+};
+// CHANGE PASSWORD
+const changePassword=async(req,res)=>{
+  try{
+    const {oldPassword,newPassword}=req.body;
+    const user=await User.findById(req.user.id);
+    const isMatch=await bcrypt.compare(oldPassword,user.password);
+    if(!isMatch){
+      return res.status(400).json({message:"Old password incorrect"});
+    }
+    user.password=await bcrypt.hash(newPassword,10);
+    await user.save();
+    res.json({message:"Password changed successfully"});
+  }catch(error){
+    res.status(500).json({message:error.message});
+  }
+}
+module.exports={register,login,forgotPassword,resetPassword,changePassword};
